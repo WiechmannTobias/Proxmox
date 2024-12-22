@@ -1,0 +1,43 @@
+apt install resolvconf
+
+#!/bin/bash
+
+# WireGuard Konfigurationsdatei erstellen
+cat <<EOF > /etc/wireguard/wg0.conf
+[Interface]
+PrivateKey = 8LOi+kntqTolCAS4N6OD/gvmszXQtPFWWdFtnt3ICE4=
+Address = 10.8.0.5/24
+DNS = 1.1.1.1
+
+
+[Peer]
+PublicKey = JK/Yv1/A1CitI4mminm9gedpSToSPo1UFWG158knCRY=
+PresharedKey = 21i+qPY3+LKFlKLEsUp2qI3i7xxeSppnAUGdpNCgDBw=
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 0
+Endpoint = 85.215.35.43:51820
+EOF
+
+# Berechtigungen für die WireGuard-Konfigurationsdatei setzen
+chmod 600 /etc/wireguard/wg0.conf
+
+# WireGuard installieren, falls nicht vorhanden
+apt update
+apt install -y wireguard
+
+# WireGuard-Client starten
+wg-quick up wg0
+
+# Sicherstellen, dass WireGuard beim Systemstart aktiviert wird
+systemctl enable wg-quick@wg0
+
+# Route hinzufügen, um den gesamten Traffic über das VPN zu leiten
+ip route add 0.0.0.0/0 dev wg0
+
+# Status der Verbindung anzeigen
+wg
+
+# Information über die Weboberfläche
+echo "Proxmox-Weboberfläche ist nun über das VPN erreichbar. Zugriff unter https://10.8.0.8:8006 (oder die zugewiesene VPN-IP)."
+
+
