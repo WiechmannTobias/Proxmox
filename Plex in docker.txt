@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# Überprüfen, ob Docker installiert ist
+if ! command -v docker &> /dev/null; then
+    echo "Docker ist nicht installiert. Bitte installiere Docker zuerst."
+    exit 1
+fi
+
+# Benutzer nach dem Pfad zur externen Festplatte fragen
+read -p "Bitte gib den Pfad zu deiner externen Festplatte ein (z.B. /media/benutzername/externe_festplatte): " MEDIA_PATH
+
+# Überprüfen, ob der angegebene Pfad existiert
+if [ ! -d "$MEDIA_PATH" ]; then
+    echo "Der angegebene Pfad existiert nicht. Bitte überprüfe den Pfad und versuche es erneut."
+    exit 1
+fi
+
+# Plex Media Server installieren (neuer Container)
+echo "Installiere Plex Media Server..."
+if [ "$(docker ps -q -f name=plex)" ]; then
+    echo "Plex Container läuft bereits."
+else
+    sudo docker run -d --name plex --restart=unless-stopped \
+        -e PLEX_CLAIM=DEIN_CLAIM_TOKEN_HIER \  # Optional: Ersetze mit deinem Plex Claim Token oder lasse leer.
+        -e PUID=1000 \
+        -e PGID=1000 \
+        -p 32400:32400 \
+        -v ~/docker/plex:/config \  # Speicherort der persistente Plex Config Dateien anpassen
+        -v "$MEDIA_PATH:/Filme:ro" \  # Verwende den angegebenen Pfad für die Medien
+        --network=host \
+        lscr.io/linuxserver/plex:latest
+fi
+
+# UFW-Regeln konfigurieren
+echo "Konfiguriere UFW für Plex..."
+sudo ufw allow 32400/tcp comment 'Plex Media Server'
+sudo ufw reload
+
+# Abschlussnachricht
+echo "Installation abgeschlossen."
+echo "Plex Media Server ist unter http://<deine_server_ip>:32400/web erreichbar."
+
+# Hinweise zum Ändern des Medienpfads:
+echo ""
+echo "Hinweise zum Ändern des Medienpfads:"
+echo "1. Um den Pfad zu ändern, stoppe den Plex-Container:"
+echo "   docker stop plex"
+echo ""
+echo "2. Verschiebe die Daten von dem alten Pfad zu dem neuen Pfad (z.B.):"
+echo "   mv /old/path/to/plex /new/path/to/plex"
+echo ""
+echo "3. Starte den Container mit dem neuen Pfad:"
+echo "   docker run -d --name plex --restart=unless-stopped \\"
+echo "       -e PLEX_CLAIM=DEIN_CLAIM_TOKEN_HIER \\"
+echo "       -e PUID=1000 \\"
+echo "       -e PGID=1000 \\"
+echo "       -p 32400:32400 \\"
+echo "       -v ~/docker/plex:/config \\"
+echo "       -v /new/path/to/plex:/Filme:ro \\"
+echo "       --network=host \\"
+echo "       lscr.io/linuxserver/plex:latest"
