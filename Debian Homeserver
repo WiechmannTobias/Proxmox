@@ -1,0 +1,231 @@
+#!/bin/bash
+
+# Funktion zur Installation von WireGuard
+install_wireguard() {
+    echo "Aktualisiere System und installiere grundlegende Pakete..."
+    sudo apt update && sudo apt upgrade -y
+    echo "Installiere WireGuard..."
+    sudo apt install -y wireguard resolvconf
+
+    echo "Richte WireGuard ein..."
+    mkdir -p /etc/wireguard
+    chmod 700 /etc/wireguard
+
+    # Deine Konfigurationsdaten für WireGuard
+    PRIVATE_KEY="kgLsaWWD1ecR89p2E="
+    PUBLIC_KEY="nCRY="
+    PRESHARED_KEY="wmEmcC3ibgk/Q5MZs="
+    VPN_ENDPOINT="85.215.35.43:51820"
+    ALLOWED_IPS="0.0.0.0/0, ::/0"  # Zugriff über das VPN für alles
+
+    # Die Konfiguration in die WireGuard-Konfigurationsdatei eintragen
+    cat <<EOF | sudo tee /etc/wireguard/wg0.conf
+[Interface]
+PrivateKey = $PRIVATE_KEY
+Address = 10.8.0.8/24
+DNS = 1.1.1.1
+
+[Peer]
+PublicKey = $PUBLIC_KEY
+PresharedKey = $PRESHARED_KEY
+AllowedIPs = $ALLOWED_IPS
+Endpoint = $VPN_ENDPOINT
+EOF
+
+    sudo chmod 600 /etc/wireguard/wg0.conf
+
+    # Starten von WireGuard und aktivieren, dass es beim Booten startet
+    sudo wg-quick up wg0
+    sudo systemctl enable wg-quick@wg0
+
+    echo "WireGuard ist aktiviert. Der Server ist sowohl intern als auch remote erreichbar."
+
+    # Lokale IP-Adresse (192.168.188.25) und WireGuard konfigurieren
+    # Um sicherzustellen, dass die IP-Verbindung auch über WireGuard läuft
+    echo "Verknüpfe lokale IP (192.168.188.25) mit WireGuard IP (10.8.0.8)..."
+    sudo ip addr add 10.8.0.8/24 dev wg0
+
+    # Routing einrichten, damit die Verbindung zwischen der lokalen IP und der WireGuard-IP funktioniert
+    echo "Konfiguriere Routing, damit die Verbindung zwischen der lokalen IP und WireGuard IP funktioniert..."
+    sudo ip route add 192.168.188.0/24 via 10.8.0.8 dev wg0
+
+    # Aktivierung der IP-Weiterleitung
+    echo "Aktiviere IP-Weiterleitung..."
+    sudo sysctl -w net.ipv4.ip_forward=1
+    sudo sysctl -w net.ipv6.conf.all.forwarding=1
+    sudo sysctl -p  # Einstellungen permanent machen
+
+    # Firewall konfigurieren
+    echo "Konfiguriere die Firewall für WireGuard..."
+    # Allow WireGuard VPN port 51820/UDP
+    sudo ufw allow 51820/udp comment 'Allow WireGuard VPN'
+
+    # Allow the local network (192.168.188.0/24) to access the server
+    sudo ufw allow from 192.168.188.0/24 to any port 22 comment 'Allow SSH from local network'
+
+    # Allow WireGuard interface
+    sudo ufw allow in on wg0 comment 'Allow traffic on WireGuard interface'
+
+    # Ensure that the firewall is enabled and apply the rules
+    sudo ufw enable
+    sudo ufw reload
+
+    echo "Firewall und Routing sind konfiguriert."
+}
+
+# Funktion zur Deaktivierung des Ruhemodus und Standby
+disable_sleep_mode() {
+    echo "Deaktiviere Ruhemodus und Standby-Modus..."
+    sudo sed -i 's/^#HandleLidSwitch= suspend/HandleLidSwitch=ignore/' /etc/systemd/logind.conf
+    sudo sed -i 's/^#HandleLidSwitchDocked= suspend/HandleLidSwitchDocked=ignore/' /etc/systemd/logind.conf
+    sudo sed -i 's/^#HandleSuspendKey= suspend/HandleSuspendKey=ignore/' /etc/systemd/logind.conf
+    sudo sed -i 's/^#HandleHibernateKey= hibernate/HandleHibernateKey=ignore/' /etc/systemd/logind.conf
+    sudo sed -i 's/^#IdleAction= suspend/IdleAction=ignore/' /etc/systemd/logind.conf
+    sudo systemctl restart systemd-logind
+    sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+    echo "Ruhemodus und Standby deaktiviert."
+}
+
+# Funktion zur Installation von Docker
+install_docker() {
+    echo "Installiere Docker..."
+    sudo apt install -y apt-transport-https ca-certificates curl software-properties-common
+    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+    echo "deb [arch=$(dpkg --print-architecture)] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt update
+    sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+    sudo systemctl enable docker
+    sudo systemctl start docker
+}
+
+# Funktion zur Installation von Home Assistant
+install_home_assistant() {
+    echo "Installiere Home Assistant..."
+    if [ "$(docker ps -q -f name=homeassistant)" ]; then
+        echo "Home Assistant Container läuft bereits."
+    else
+        sudo docker run -d --name homeassistant --privileged --restart=unless-stopped \
+            -e TZ=UTC \
+            -v /homeassistant/config:/config \
+            --network=host \
+            ghcr.io/home-assistant/home-assistant:stable
+        echo "Home Assistant ist unter http://10.8.0.8:8123 erreichbar."
+    fi
+}
+
+# Funktion zur Installation von Plex Media Server
+install_plex() {
+    read -p "Bitte gib den Pfad zu deiner externen Festplatte ein (z.B. /media/benutzername/externe_festplatte): " MEDIA_PATH
+
+    if [ ! -d "$MEDIA_PATH" ]; then
+        echo "Der angegebene Pfad existiert nicht. Bitte überprüfe den Pfad und versuche es erneut."
+        exit 1
+    fi
+
+    echo "Installiere Plex Media Server..."
+    if [ "$(docker ps -q -f name=plex)" ]; then
+        echo "Plex Container läuft bereits."
+    else
+        sudo docker run -d --name plex --restart=unless-stopped \
+            -e PLEX_CLAIM=DEIN_CLAIM_TOKEN_HIER \
+            -e PUID=1000 \
+            -e PGID=1000 \
+            -p 32400:32400 \
+            -v ~/docker/plex:/config \
+            -v "$MEDIA_PATH:/Filme:ro" \
+            --network=host \
+            lscr.io/linuxserver/plex:latest
+        echo "Plex Media Server ist unter http://<deine_server_ip>:32400/web erreichbar."
+    fi
+    echo "Konfiguriere UFW für Plex..."
+    sudo ufw allow 32400/tcp comment 'Plex Media Server'
+}
+
+# Funktion zur Installation von Nextcloud
+install_nextcloud() {
+    # Auswahl für Test oder Live-Umgebung
+    echo "Wählen Sie die Umgebung für Nextcloud:"
+    echo "1) Test-Umgebung (SQLite)"
+    echo "2) Live-Umgebung (MySQL/MariaDB)"
+    read -p "Geben Sie 1 oder 2 ein: " ENVIRONMENT
+
+    if [ "$ENVIRONMENT" -eq 1 ]; then
+        DB_TYPE="sqlite"
+        DB_NAME="nextcloud_test.db"
+        echo "Test-Umgebung gewählt: Verwendung von SQLite"
+    elif [ "$ENVIRONMENT" -eq 2 ]; then
+        DB_TYPE="mysql"
+        DB_NAME="nextcloud_live"
+        read -p "Geben Sie den Datenbankbenutzernamen ein: " DB_USER
+        read -sp "Geben Sie das Datenbankpasswort ein: " DB_PASSWORD
+        echo
+        read -p "Geben Sie den Datenbank-Host ein (z.B. localhost): " DB_HOST
+        echo "Live-Umgebung gewählt: Verwendung von MySQL/MariaDB"
+    else
+        echo "Ungültige Auswahl. Skript wird beendet."
+        exit 1
+    fi
+
+    echo "Installiere MariaDB für Nextcloud..."
+    if [ "$DB_TYPE" == "mysql" ]; then
+        sudo docker run -d --name mariadb --restart unless-stopped \
+            -e MYSQL_ROOT_PASSWORD=supersecurepassword \
+            -e MYSQL_DATABASE=$DB_NAME \
+            -e MYSQL_USER=$DB_USER \
+            -e MYSQL_PASSWORD=$DB_PASSWORD \
+            -v ~/docker/mariadb:/var/lib/mysql \
+            mariadb:latest
+    fi
+
+    echo "Installiere Nextcloud..."
+    sudo docker network create nextcloud-net
+    sudo docker run -d --name nextcloud --restart unless-stopped \
+        -p 8080:80 \
+        --network nextcloud-net \
+        -v ~/docker/nextcloud:/var/www/html \
+        nextcloud:stable
+
+    echo "Nextcloud ist unter http://<deine_server_ip>:8080 erreichbar."
+}
+
+# Hauptmenü
+while true; do
+    echo ""
+    echo "Bitte wähle eine Option:"
+    echo "1) Docker und WireGuard installieren"
+    echo "2) Home Assistant installieren"
+    echo "3) Plex Media Server installieren"
+    echo "4) Nextcloud installieren"
+    echo "6) Ruhemodus deaktivieren"
+    echo "7) Beenden"
+
+    read -p "Gib deine Wahl ein (1-7): " choice
+
+    case $choice in
+        1)
+            install_docker
+            install_wireguard
+            ;;
+
+        2)
+            install_home_assistant
+            ;;
+        3)
+            install_plex
+            ;;
+        4)
+            install_nextcloud
+            ;;
+
+        6)
+            disable_sleep_mode
+            ;;
+        7)
+            echo "Beende das Skript."
+            exit 0
+            ;;
+        *)
+            echo "Ungültige Auswahl. Bitte wähle eine Zahl zwischen 1 und 7."
+            ;;
+    esac
+done
