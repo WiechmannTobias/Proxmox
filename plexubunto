@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# Schritt 1: Systemaktualisierung
+echo "System wird aktualisiert..."
+apt update && apt upgrade -y
+
+# Schritt 2: Installation von Plex Media Server
+echo "Plex Media Server wird installiert..."
+
+# Plex Repo hinzufügen
+curl https://downloads.plex.tv/plex-keys/PlexSign.key | sudo apt-key add -
+echo "deb https://downloads.plex.tv/repo/deb public main" | sudo tee /etc/apt/sources.list.d/plex.list
+
+# Plex installieren
+apt update
+apt install -y plexmediaserver
+
+# Schritt 3: Plex-Konfiguration
+echo "Plex Media Server wird konfiguriert..."
+
+# Sicherstellen, dass Plex beim Systemstart automatisch startet
+systemctl enable plexmediaserver
+
+# Schritt 4: Netzwerkkonfiguration (Zugriff über interne IP und über Proxmox-IP)
+echo "Stelle sicher, dass Plex über die interne IP und die Proxmox-IP zugänglich ist..."
+
+# Plex konfigurieren, um nur an den richtigen Schnittstellen zu lauschen
+# Ermitteln der IP-Adresse des Servers
+SERVER_IP=$(hostname -I | awk '{print $1}')
+echo "Interne IP-Adresse des Servers: $SERVER_IP"
+
+# Falls du Plex an mehreren IP-Adressen (interne und Proxmox-IP) lauschen lassen möchtest,
+# kannst du den Standard-Port 32400 explizit in der Plex-Konfiguration setzen
+# Die Plex-Konfiguration für das Netzwerk ist in der Datei: /etc/plexmediaserver/plexmediaserver.conf
+
+# Überprüfen, ob die Datei existiert
+if [ -f /etc/plexmediaserver/plexmediaserver.conf ]; then
+  # Sicherstellen, dass Plex die richtige IP-Adresse verwendet (intern und über Proxmox)
+  echo "PLEX_MEDIA_SERVER_ADDRESS=$SERVER_IP" >> /etc/plexmediaserver/plexmediaserver.conf
+else
+  echo "Fehler: Konfigurationsdatei von Plex nicht gefunden."
+  exit 1
+fi
+
+# Schritt 5: Plex-Dienst neu starten
+echo "Plex Media Server wird neu gestartet..."
+systemctl restart plexmediaserver
+
+# Schritt 6: Sicherstellen, dass Plex in der Firewall zugänglich ist
+echo "Stelle sicher, dass Plex über die Firewall erreichbar ist..."
+
+# Erlaube den Plex-Port 32400 in der Firewall
+ufw allow 32400/tcp
+
+# Schritt 7: Überprüfen, ob Plex läuft
+echo "Überprüfe, ob Plex erfolgreich läuft..."
+systemctl status plexmediaserver
+
+# Schritt 8: Fertig
+echo "Plex Media Server wurde erfolgreich installiert und konfiguriert."
+echo "Du kannst jetzt über die IP-Adresse des Servers (http://$SERVER_IP:32400) und die Proxmox-IP auf Plex zugreifen."
